@@ -74,7 +74,7 @@ int listMatchObjects(void *a, void *b) {
  */
 redisClient *createClient(int fd) {
 
-    // 分配空间
+    // 分配空间，为用户连接创建 client 对象
     redisClient *c = zmalloc(sizeof(redisClient));
 
     /* passing -1 as fd it is possible to create a non connected client.
@@ -93,7 +93,12 @@ redisClient *createClient(int fd) {
         // 设置 keep alive
         if (server.tcpkeepalive)
             anetKeepAlive(NULL,fd,server.tcpkeepalive);
-        // 绑定读事件到事件 loop （开始接收命令请求）
+        
+        // 为用户连接注册读事件回调函数
+        // 绑定读事件到 event loop （开始接收命令请求）
+        //
+        // aeCreateFileEvent 就是将该用户连接 socket fd 对应的读处理函数设置为 
+        // readQueryFromClient, 并且设置私有数据为 redisClient c。
         if (aeCreateFileEvent(server.el,fd,AE_READABLE,
             readQueryFromClient, c) == AE_ERR)
         {
@@ -231,6 +236,8 @@ int prepareClientToWrite(redisClient *c) {
     if (c->bufpos == 0 && listLength(c->reply) == 0 &&
         (c->replstate == REDIS_REPL_NONE ||
          c->replstate == REDIS_REPL_ONLINE) &&
+
+        // 注册写回复回调函数，私有数据是 redisClient
         aeCreateFileEvent(server.el, c->fd, AE_WRITABLE,
         sendReplyToClient, c) == AE_ERR) return REDIS_ERR;
 
@@ -261,6 +268,8 @@ robj *dupLastObjectIfNeeded(list *reply) {
 
 /*
  * 尝试将回复添加到 c->buf 中
+ * 
+ * 该方法是向固定缓存中写，如果写不下的话就继续调用 _addReplyStringToList 往链表里写。
  */
 int _addReplyToBuffer(redisClient *c, char *s, size_t len) {
     size_t available = sizeof(c->buf)-c->bufpos;
@@ -277,7 +286,7 @@ int _addReplyToBuffer(redisClient *c, char *s, size_t len) {
     // 空间必须满足
     if (len > available) return REDIS_ERR;
 
-    // 复制内容到 c->buf 里面
+    // 拷贝到 client 对象的 Response buffer 中
     memcpy(c->buf+c->bufpos,s,len);
     c->bufpos+=len;
 
@@ -404,6 +413,10 @@ void _addReplyStringToList(redisClient *c, char *s, size_t len) {
  * The following functions are the ones that commands implementations will call.
  * -------------------------------------------------------------------------- */
 
+// 在 addReply 方法中做了两件事情：
+
+// 1. prepareClientToWrite 判断是否需要返回数据，并且将当前 client 添加到 `等待写返回数据队列` 中。(当前版本没有这个等待队列 server.clients_pending_write)
+// 2. 调用 _addReplyToBuffer 和 _addReplyObjectToList 方法将返回值写入到输出缓冲区中，等待写入 socekt
 void addReply(redisClient *c, robj *obj) {
 
     // 为客户端安装写处理器到事件循环
@@ -750,9 +763,9 @@ void copyClientOutputBuffer(redisClient *dst, redisClient *src) {
  */
 #define MAX_ACCEPTS_PER_CALL 1000
 static void acceptCommonHandler(int fd, int flags) {
-
     // 创建客户端
     redisClient *c;
+
     if ((c = createClient(fd)) == NULL) {
         redisLog(REDIS_WARNING,
             "Error registering fd event for the new client: %s (fd=%d)",
@@ -765,6 +778,7 @@ static void acceptCommonHandler(int fd, int flags) {
      * connection. Note that we create the client instead to check before
      * for this condition, since now the socket is already set in non-blocking
      * mode and we can send an error for free using the Kernel I/O */
+    //
     // 如果新添加的客户端令服务器的最大客户端数量达到了
     // 那么向新客户端写入错误信息，并关闭新客户端
     // 先创建客户端，再进行数量检查是为了方便地进行错误信息写入
@@ -808,6 +822,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
+        
         // 为客户端创建客户端状态（redisClient）
         acceptCommonHandler(cfd,0);
     }
@@ -832,6 +847,7 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         redisLog(REDIS_VERBOSE,"Accepted connection to %s", server.unixsocket);
+        
         // 为本地客户端创建客户端状态
         acceptCommonHandler(cfd,REDIS_UNIX_SOCKET);
     }
@@ -1544,6 +1560,12 @@ void processInputBuffer(redisClient *c) {
 
 /*
  * 读取客户端的查询缓冲区内容
+ * 
+ * 解析并查找命令
+ * 调用命令处理
+ * 添加写任务到队列
+ * 将输出写到缓存等待发送
+ * 
  */
 void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     redisClient *c = (redisClient*) privdata;

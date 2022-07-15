@@ -88,6 +88,11 @@ typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 /* File event structure
  *
  * 文件事件结构
+ * 
+ * 将来 当 epoll_wait 发现某个 fd 上有事件发生的时候，
+ * 这样 redis 首先根据 fd 到 eventLoop->events 中
+ * 查找 aeFileEvent 对象，然后再看 rfileProc、wfileProc 
+ * 就可以找到读、写回调处理函数。
  */
 typedef struct aeFileEvent {
 
@@ -96,10 +101,10 @@ typedef struct aeFileEvent {
     // 或者 AE_READABLE | AE_WRITABLE
     int mask; /* one of AE_(READABLE|WRITABLE) */
 
-    // 读事件处理器
+    // 读事件回调
     aeFileProc *rfileProc;
 
-    // 写事件处理器
+    // 写事件回调
     aeFileProc *wfileProc;
 
     // 多路复用库的私有数据

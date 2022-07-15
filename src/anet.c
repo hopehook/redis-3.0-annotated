@@ -481,7 +481,11 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backl
             continue;
 
         if (af == AF_INET6 && anetV6Only(err,s) == ANET_ERR) goto error;
+
+        // 设置端口重用
         if (anetSetReuseAddr(err,s) == ANET_ERR) goto error;
+
+        // 监听
         if (anetListen(err,s,p->ai_addr,p->ai_addrlen,backlog) == ANET_ERR) goto error;
         goto end;
     }
@@ -528,6 +532,7 @@ int anetUnixServer(char *err, char *path, mode_t perm, int backlog)
     return s;
 }
 
+// 在 anetTcpAccept 中执行非常的简单，就是调用 accept 把连接接收回来。
 static int anetGenericAccept(char *err, int s, struct sockaddr *sa, socklen_t *len) {
     int fd;
     while(1) {

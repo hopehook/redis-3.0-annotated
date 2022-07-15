@@ -195,6 +195,8 @@ void psetexCommand(redisClient *c) {
     setGenericCommand(c,REDIS_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_MILLISECONDS,NULL,NULL);
 }
 
+// getGenericCommand 方法会调用 lookupKeyReadOrReply 来从内存中查找对应的 key值。
+// 如果找不到，则直接返回 C_OK；如果找到了，调用 addReplyBulk 方法将值添加到输出缓冲区中。
 int getGenericCommand(redisClient *c) {
     robj *o;
 

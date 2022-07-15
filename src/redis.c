@@ -178,7 +178,10 @@ struct redisCommand *commandTable;
  *    使得在集群模式下，一个被标示为 importing 的槽可以接收这命令。
  */
 struct redisCommand redisCommandTable[] = {
+    // 对于 get 命令来说，其对应的命令处理函数就是 getCommand。
+    // 也就是说当处理 GET 命令执行到 c->cmd->proc 的时候会进入到 getCommand 函数中来。
     {"get",getCommand,2,"r",0,NULL,1,1,1,0,0},
+    
     {"set",setCommand,-3,"wm",0,NULL,1,1,1,0,0},
     {"setnx",setnxCommand,3,"wm",0,NULL,1,1,1,0,0},
     {"setex",setexCommand,4,"wm",0,NULL,1,1,1,0,0},
@@ -1565,6 +1568,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 /* This function gets called every time Redis is entering the
  * main loop of the event driven library, that is, before to sleep
  * for ready file descriptors. */
+//
 // 每次处理事件之前执行
 void beforeSleep(struct aeEventLoop *eventLoop) {
     REDIS_NOTUSED(eventLoop);
@@ -2020,6 +2024,7 @@ int listenToPort(int port, int *fds, int *count) {
                 port, server.neterr);
             return REDIS_ERR;
         }
+        // socket 非阻塞
         anetNonBlock(NULL,fds[*count]);
         (*count)++;
     }
@@ -2077,6 +2082,7 @@ void initServer() {
     // 创建共享对象
     createSharedObjects();
     adjustOpenFilesLimit();
+    // 创建 epoll
     server.el = aeCreateEventLoop(server.maxclients+REDIS_EVENTLOOP_FDSET_INCR);
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
 
@@ -2158,6 +2164,8 @@ void initServer() {
     // 为 TCP 连接关联连接应答（accept）处理器
     // 用于接受并应答客户端的 connect() 调用
     for (j = 0; j < server.ipfd_count; j++) {
+        // listen fd 对应的读回调函数 rfileProc 事实上就被设置成了 acceptTcpHandler，
+        // 写回调没有设置，私有数据 client_data 也为 null。
         if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
             acceptTcpHandler,NULL) == AE_ERR)
             {
@@ -2437,8 +2445,10 @@ void call(redisClient *c, int flags) {
     dirty = server.dirty;
     // 计算命令开始执行的时间
     start = ustime();
-    // 执行实现函数
+    
+    // *执行实现函数
     c->cmd->proc(c);
+    
     // 计算命令执行耗费的时间
     duration = ustime()-start;
     // 计算命令执行之后的 dirty 值
@@ -2752,6 +2762,8 @@ int processCommand(redisClient *c) {
     }
 
     /* Exec the command */
+    // 处理命令
+    // 如果是 MULTI 事务，则入队，否则调用 call 直接处理
     if (c->flags & REDIS_MULTI &&
         c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != multiCommand && c->cmd->proc != watchCommand)
@@ -2762,7 +2774,7 @@ int processCommand(redisClient *c) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
-        // 执行命令
+        // *执行用户命令的核心入口
         call(c,REDIS_CALL_FULL);
 
         c->woff = server.master_repl_offset;

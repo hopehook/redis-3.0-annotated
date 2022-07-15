@@ -119,6 +119,7 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
     ee.data.u64 = 0; /* avoid valgrind warning */
     ee.data.fd = fd;
 
+    // epoll_ctl 添加事件
     if (epoll_ctl(state->epfd,op,fd,&ee) == -1) return -1;
 
     return 0;
